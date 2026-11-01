@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<actions>
+<action>
+	<icon>application-pdf</icon>
+	<name>Tümünü PDF&apos;ye Dönüştür (A4)</name>
+	<submenu></submenu>
+	<unique-id>1790003097177159-2</unique-id>
+	<command>a4-pdf-tools --convert %F</command>
+	<description>Seçilen görselleri, PDF ve UDF dosyalarını ayrı ayrı A4 boyutunda PDF&apos;e çevirir</description>
+	<range></range>
+	<patterns>*.tif;*.tiff;*.jpg;*.jpeg;*.png;*.pdf;*.udf;*.bmp;*.webp;*.TIF;*.TIFF;*.JPG;*.JPEG;*.PNG;*.PDF;*.UDF;*.BMP;*.WEBP</patterns>
+	<image-files/>
+	<other-files/>
+	<text-files/>
+</action>
+<action>
+	<icon>document-save-all</icon>
+	<name>Tümünü Tek PDF&apos;de Birleştir (A4)</name>
+	<submenu></submenu>
+	<unique-id>1790003097177159-3</unique-id>
+	<command>a4-pdf-tools --merge %F</command>
+	<description>Seçilen tüm belgeleri ve görselleri A4 kağıt standartlarında tek bir PDF dosyasında birleştirir</description>
+	<range></range>
+	<patterns>*.tif;*.tiff;*.jpg;*.jpeg;*.png;*.pdf;*.udf;*.bmp;*.webp;*.TIF;*.TIFF;*.JPG;*.JPEG;*.PNG;*.PDF;*.UDF;*.BMP;*.WEBP</patterns>
+	<image-files/>
+	<other-files/>
+	<text-files/>
+</action>
+<action>
+	<icon>application-pdf</icon>
+	<name>PDF&apos;ye Çevir (UYAP)</name>
+	<submenu></submenu>
+	<unique-id>1790003097177159-4</unique-id>
+	<command>uyap-convert --pdf %F</command>
+	<description>UDF dosyasını UYAP Doküman Editörü resmi vektör motoruyla birebir PDF&apos;e dönüştürür</description>
+	<range></range>
+	<patterns>*.udf;*.UDF</patterns>
+	<other-files/>
+	<text-files/>
+</action>
+<action>
+	<icon>x-office-document</icon>
+	<name>DOCX&apos;e Çevir (UYAP)</name>
+	<submenu></submenu>
+	<unique-id>1790003097177159-5</unique-id>
+	<command>uyap-convert --docx %F</command>
+	<description>UDF dosyasını UYAP resmi ODF motoru ve LibreOffice ile kusursuz DOCX Word belgesine dönüştürür</description>
+	<range></range>
+	<patterns>*.udf;*.UDF</patterns>
+	<other-files/>
+	<text-files/>
+</action>
+<action>
+	<icon>x-office-document</icon>
+	<name>ODT&apos;ye Çevir (UYAP)</name>
+	<submenu></submenu>
+	<unique-id>1790003097177159-6</unique-id>
+	<command>uyap-convert --odt %F</command>
+	<description>UDF dosyasını UYAP resmi OdfToolkit motoruyla birebir OpenDocument ODT formatına dönüştürür</description>
+	<range></range>
+	<patterns>*.udf;*.UDF</patterns>
+	<other-files/>
+	<text-files/>
+</action>
+</actions>

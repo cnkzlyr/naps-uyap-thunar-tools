@@ -1,0 +1,154 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# ==============================================================================
+# UYAP Belge Dönüştürücü (UDF -> PDF / DOCX / ODT)
+# UYAP Doküman Editörü Resmi Kütüphaneleri ve Motoru ile Birebir Dönüşüm
+# ==============================================================================
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$(dirname "$SCRIPT_DIR")"
+EXPORTER_JAR="$BASE_DIR/java/uyap-exporter.jar"
+
+# Java ve Jar tespiti
+JAVA_EXEC="$(which java || echo "/data/data/com.termux/files/usr/bin/java")"
+
+# Jars klasörünü tespit et
+UYAP_JARS_DIR="${UYAP_JARS_DIR:-$HOME/jars}"
+if [ ! -d "$UYAP_JARS_DIR" ]; then
+    if [ -d "/data/data/com.termux/files/home/jars" ]; then
+        UYAP_JARS_DIR="/data/data/com.termux/files/home/jars"
+    elif [ -d "$HOME/home/jars" ]; then
+        UYAP_JARS_DIR="$HOME/home/jars"
+    fi
+fi
+
+if [ ! -f "$EXPORTER_JAR" ]; then
+    # Derlenmemişse derle
+    echo "[BİLGİ] uyap-exporter.jar derleniyor..."
+    mkdir -p "$BASE_DIR/java"
+    javac -d "$BASE_DIR/java" "$BASE_DIR/java/UyapVectorExporter.java" -cp "$UYAP_JARS_DIR/*"
+    jar cvf "$EXPORTER_JAR" -C "$BASE_DIR/java" uyap
+fi
+
+CP="$EXPORTER_JAR:$UYAP_JARS_DIR/*"
+
+notify() {
+    local title="$1"
+    local msg="$2"
+    local icon="${3:-document-save}"
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -i "$icon" "$title" "$msg" 2>/dev/null || true
+    fi
+    echo "[$title] $msg"
+}
+
+if [ $# -lt 2 ]; then
+    echo "Kullanım: uyap-convert <--pdf|--docx|--odt> <dosya1.udf> [dosya2.udf ...]"
+    exit 1
+fi
+
+MODE="$1"
+shift
+
+SUCCESS_COUNT=0
+FAIL_COUNT=0
+LAST_OUT=""
+
+for F in "$@"; do
+    if [ ! -f "$F" ]; then
+        echo "[UYARI] Dosya bulunamadı, atlandı: $F"
+        continue
+    fi
+
+    DIR="$(dirname "$F")"
+    BNAME="$(basename "$F")"
+    BASE="${BNAME%.*}"
+
+    case "$MODE" in
+        --pdf)
+            OUT="$DIR/${BASE}.pdf"
+            echo "[İŞLEM] UDF -> PDF dönüştürülüyor: $BNAME"
+            if "$JAVA_EXEC" -Djava.awt.headless=true \
+                --add-opens=java.base/java.util=ALL-UNNAMED \
+                --add-opens=java.base/java.lang=ALL-UNNAMED \
+                --add-opens=java.desktop/java.awt=ALL-UNNAMED \
+                --add-opens=java.desktop/javax.swing=ALL-UNNAMED \
+                -cp "$CP" uyap.UyapVectorExporter pdf "$F" "$OUT"; then
+                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                LAST_OUT="$OUT"
+            else
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+            ;;
+        --odt)
+            OUT="$DIR/${BASE}.odt"
+            echo "[İŞLEM] UDF -> ODT dönüştürülüyor: $BNAME"
+            if "$JAVA_EXEC" -Djava.awt.headless=true \
+                --add-opens=java.base/java.util=ALL-UNNAMED \
+                --add-opens=java.base/java.lang=ALL-UNNAMED \
+                --add-opens=java.desktop/java.awt=ALL-UNNAMED \
+                --add-opens=java.desktop/javax.swing=ALL-UNNAMED \
+                -cp "$CP" uyap.UyapVectorExporter odt "$F" "$OUT"; then
+                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                LAST_OUT="$OUT"
+            else
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+            ;;
+        --docx)
+            TMP_ODT="$TMPDIR/${BASE}_$$.odt"
+            OUT="$DIR/${BASE}.docx"
+            echo "[İŞLEM] UDF -> DOCX dönüştürülüyor (UYAP Motoru): $BNAME"
+            
+            # Adım 1: UYAP resmi motoruyla ODT üret
+            if "$JAVA_EXEC" -Djava.awt.headless=true \
+                --add-opens=java.base/java.util=ALL-UNNAMED \
+                --add-opens=java.base/java.lang=ALL-UNNAMED \
+                --add-opens=java.desktop/java.awt=ALL-UNNAMED \
+                --add-opens=java.desktop/javax.swing=ALL-UNNAMED \
+                -cp "$CP" uyap.UyapVectorExporter odt "$F" "$TMP_ODT"; then
+                
+                # Adım 2: LibreOffice headless ile kusursuz DOCX'e aktar
+                if soffice --headless --convert-to docx "$TMP_ODT" --outdir "$DIR" >/dev/null 2>&1; then
+                    # Üretilen dosya adını kontrol et
+                    GEN_DOCX="$DIR/${BASE}_$$.docx"
+                    if [ -f "$GEN_DOCX" ]; then
+                        mv "$GEN_DOCX" "$OUT"
+                    fi
+                    rm -f "$TMP_ODT"
+                    if [ -f "$OUT" ]; then
+                        echo "[BAŞARILI] DOCX üretildi: $OUT"
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                        LAST_OUT="$OUT"
+                    else
+                        FAIL_COUNT=$((FAIL_COUNT + 1))
+                    fi
+                else
+                    rm -f "$TMP_ODT"
+                    FAIL_COUNT=$((FAIL_COUNT + 1))
+                fi
+            else
+                rm -f "$TMP_ODT"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+            ;;
+        *)
+            echo "[HATA] Geçersiz parametre: $MODE. Kullanın: --pdf, --docx, --odt"
+            exit 2
+            ;;
+    esac
+done
+
+EXT_LABEL="${MODE#--}"
+EXT_LABEL="$(echo "$EXT_LABEL" | tr '[:lower:]' '[:upper:]')"
+
+if [ $SUCCESS_COUNT -gt 0 ]; then
+    if [ $SUCCESS_COUNT -eq 1 ]; then
+        notify "UYAP Dönüştürme Başarılı" "$EXT_LABEL dosyası oluşturuldu:\n$(basename "$LAST_OUT")" "application-pdf"
+    else
+        notify "UYAP Dönüştürme Başarılı" "$SUCCESS_COUNT adet dosya başarıyla $EXT_LABEL formatına dönüştürüldü." "application-pdf"
+    fi
+else
+    notify "UYAP Dönüştürme Hatası" "Dosyalar $EXT_LABEL formatına dönüştürülemedi." "dialog-error"
+fi
