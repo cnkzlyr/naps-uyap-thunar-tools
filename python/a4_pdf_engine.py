@@ -13,6 +13,7 @@ import io
 import time
 import subprocess
 import tempfile
+import urllib.parse
 from typing import List, Tuple
 
 from PIL import Image, ImageOps, ImageSequence
@@ -25,27 +26,49 @@ import pypdf
 A4_WIDTH, A4_HEIGHT = A4  # 595.2756, 841.8898
 SAFE_MARGIN = 14.1732     # ~5 mm kenar boşluğu (yazıcı güvenli alanı)
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
 UYAP_CONVERT_BIN = os.path.join(BASE_DIR, "bin", "uyap-convert")
+LOG_FILE = os.path.expanduser("~/.uyap_tools.log")
+
+
+def log(level: str, msg: str):
+    """Ortak log dosyasına ve konsola yazar."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"{timestamp} [a4-pdf-engine] [{level}] {msg}\n"
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+    print(f"[{level}] {msg}")
 
 
 def notify(title: str, message: str, icon: str = "application-pdf"):
     """Sistem masaüstü bildirimi gönderir."""
+    env = os.environ.copy()
+    env["DISPLAY"] = env.get("DISPLAY", ":0.0")
     try:
-        subprocess.run(["notify-send", "-i", icon, title, message], check=False)
+        subprocess.run(["notify-send", "-i", icon, title, message], env=env, check=False)
     except Exception:
         pass
-    print(f"[{title}] {message}")
+    log("NOTIFY", f"{title}: {message}")
+
+
+def clean_file_path(p: str) -> str:
+    """Dosya yolunu URI şemasından (%20, file://) ve gereksiz karakterlerden arındırır."""
+    p = p.strip()
+    if p.startswith("file://"):
+        p = p[7:]
+    p = urllib.parse.unquote(p)
+    return os.path.abspath(p)
 
 
 def convert_udf_to_temp_pdf(udf_path: str) -> str:
     """UDF dosyasını UYAP Doküman Editörü resmi motoruyla geçici PDF'e dönüştürür."""
-    tmp_pdf = tempfile.mktemp(suffix=".pdf")
-    cmd = [UYAP_CONVERT_BIN, "--pdf", udf_path]
-    
-    # Hedef yolu udf_convert içinde oluşturulacak PDF
     base_pdf = os.path.splitext(udf_path)[0] + ".pdf"
+    cmd = [UYAP_CONVERT_BIN, "--pdf", udf_path]
+    log("PROCESS", f"UDF resmi motorla çözülüyor: {udf_path}")
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if os.path.exists(base_pdf) and os.path.getsize(base_pdf) > 0:
         return base_pdf
@@ -165,16 +188,16 @@ def process_single_file(file_path: str) -> pypdf.PdfReader:
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == ".udf":
-        print(f"[İŞLEM] UDF resmi motorla çözülüyor: {os.path.basename(file_path)}")
+        log("PROCESS", f"UDF çözümleniyor: {os.path.basename(file_path)}")
         pdf_path = convert_udf_to_temp_pdf(file_path)
         return pdf_to_a4_pdf_pages(pdf_path)
 
     elif ext == ".pdf":
-        print(f"[İŞLEM] PDF sayfaları A4 standardına uyarlanıyor: {os.path.basename(file_path)}")
+        log("PROCESS", f"PDF sayfaları standartlaştırılıyor: {os.path.basename(file_path)}")
         return pdf_to_a4_pdf_pages(file_path)
 
     elif ext in (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".bmp", ".webp"):
-        print(f"[İŞLEM] Görsel/TIFF A4 kağıt boyutuna basılıyor: {os.path.basename(file_path)}")
+        log("PROCESS", f"Görsel/TIFF A4 kağıda basılıyor: {os.path.basename(file_path)}")
         buf = image_to_a4_pdf_pages(file_path)
         return pypdf.PdfReader(buf)
 
@@ -182,15 +205,20 @@ def process_single_file(file_path: str) -> pypdf.PdfReader:
         raise ValueError(f"Desteklenmeyen dosya formatı: {ext}")
 
 
-def convert_all_to_a4_pdf(files: List[str]):
+def convert_all_to_a4_pdf(raw_files: List[str]):
     """Seçilen tüm dosyaları ayrı ayrı A4 PDF'e dönüştürür."""
     success_count = 0
     fail_count = 0
     last_file = ""
+    last_dir = ""
+
+    files = [clean_file_path(f) for f in raw_files]
+    log("START", f"--convert eylemi başlatıldı ({len(files)} dosya)")
 
     for f in files:
         try:
             if not os.path.isfile(f):
+                log("WARN", f"Dosya bulunamadı, atlandı: {f}")
                 continue
 
             base, ext = os.path.splitext(f)
@@ -209,26 +237,33 @@ def convert_all_to_a4_pdf(files: List[str]):
 
             success_count += 1
             last_file = out_pdf
-            print(f"[BAŞARILI] A4 PDF oluşturuldu ({len(reader.pages)} sayfa): {out_pdf}")
+            last_dir = os.path.dirname(out_pdf)
+            log("SUCCESS", f"A4 PDF oluşturuldu ({len(reader.pages)} sayfa): {out_pdf}")
         except Exception as e:
             fail_count += 1
-            print(f"[HATA] {f} işlenirken hata oluştu: {e}")
+            log("ERROR", f"{f} işlenirken hata oluştu: {e}")
 
     if success_count > 0:
         if success_count == 1:
-            notify("A4 PDF Dönüştürme Tamamlandı", f"{os.path.basename(last_file)} oluşturuldu.")
+            notify("A4 PDF Dönüştürme Tamamlandı", f"{os.path.basename(last_file)} oluşturuldu.\nKonum: {last_dir}")
         else:
-            notify("A4 PDF Dönüştürme Tamamlandı", f"{success_count} dosya A4 PDF formatına dönüştürüldü.")
+            notify("A4 PDF Dönüştürme Tamamlandı", f"{success_count} dosya A4 PDF formatına dönüştürüldü.\nKonum: {last_dir}")
     else:
-        notify("Dönüştürme Başarısız", "Hiçbir dosya dönüştürülemedi.", "dialog-error")
+        notify("Dönüştürme Başarısız", f"Hiçbir dosya dönüştürülemedi.\nDetaylar: {LOG_FILE}", "dialog-error")
 
 
-def merge_all_to_single_pdf(files: List[str], output_path: str = None):
+def merge_all_to_single_pdf(raw_files: List[str], output_path: str = None):
     """Seçilen tüm dosyaları sırasıyla tek bir A4 PDF dosyasında birleştirir."""
-    if not files:
+    files = [clean_file_path(f) for f in raw_files]
+    log("START", f"--merge eylemi başlatıldı ({len(files)} dosya)")
+
+    valid_files = [f for f in files if os.path.isfile(f)]
+    if not valid_files:
+        log("ERROR", "Geçerli dosya bulunamadı.")
+        notify("Birleştirme Başarısız", "Seçilen dosyalardan hiçbiri bulunamadı.", "dialog-error")
         return
 
-    first_dir = os.path.dirname(os.path.abspath(files[0]))
+    first_dir = os.path.dirname(valid_files[0])
     if not output_path:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(first_dir, f"Birlestirilmis_Belge_{timestamp}.pdf")
@@ -237,25 +272,24 @@ def merge_all_to_single_pdf(files: List[str], output_path: str = None):
     total_pages = 0
     processed_files = 0
 
-    for f in files:
+    for f in valid_files:
         try:
-            if not os.path.isfile(f):
-                continue
             reader = process_single_file(f)
             for page in reader.pages:
                 writer.add_page(page)
                 total_pages += 1
             processed_files += 1
+            log("PROCESS", f"Eklendi ({len(reader.pages)} sayfa): {os.path.basename(f)}")
         except Exception as e:
-            print(f"[UYARI] {f} birleştirmeye eklenemedi: {e}")
+            log("WARN", f"{f} birleştirmeye eklenemedi: {e}")
 
     if total_pages > 0:
         with open(output_path, "wb") as out_f:
             writer.write(out_f)
-        print(f"[BAŞARILI] {processed_files} dosya ({total_pages} sayfa) birleştirildi: {output_path}")
-        notify("Tek PDF'de Birleştirildi", f"{processed_files} dosya ({total_pages} sayfa) birleştirildi:\n{os.path.basename(output_path)}")
+        log("SUCCESS", f"{processed_files} dosya ({total_pages} sayfa) birleştirildi: {output_path}")
+        notify("Tek PDF'de Birleştirildi", f"{processed_files} dosya ({total_pages} sayfa) birleştirildi:\n{os.path.basename(output_path)}\nKonum: {first_dir}")
     else:
-        notify("Birleştirme Başarısız", "Birleştirilecek sayfa bulunamadı.", "dialog-error")
+        notify("Birleştirme Başarısız", f"Birleştirilecek sayfa bulunamadı.\nDetaylar: {LOG_FILE}", "dialog-error")
 
 
 if __name__ == "__main__":

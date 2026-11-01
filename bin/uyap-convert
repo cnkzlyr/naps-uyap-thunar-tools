@@ -6,9 +6,45 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BASE_DIR="$(dirname "$SCRIPT_DIR")"
+# Sembolik bağlantıları çözerek gerçek script dizinini bul
+REAL_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXPORTER_JAR="$BASE_DIR/java/uyap-exporter.jar"
+
+# Ortam değişkenleri
+export PATH="/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:$PATH"
+export DISPLAY="${DISPLAY:-:0.0}"
+TMPDIR="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+[ -d "$TMPDIR" ] || TMPDIR="/tmp"
+LOG_FILE="$HOME/.uyap_tools.log"
+
+log() {
+    local level="$1"
+    shift
+    local msg="$*"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [uyap-convert] [$level] $msg" >> "$LOG_FILE" 2>/dev/null || true
+    echo "[$level] $msg"
+}
+
+notify() {
+    local title="$1"
+    local msg="$2"
+    local icon="${3:-document-save}"
+    if command -v notify-send >/dev/null 2>&1; then
+        DISPLAY="${DISPLAY:-:0.0}" notify-send -i "$icon" "$title" "$msg" 2>/dev/null || true
+    fi
+    log "NOTIFY" "$title: $msg"
+}
+
+clean_path() {
+    local p="$1"
+    p="${p#file://}"
+    if [[ "$p" == *"%"* ]]; then
+        p="$(python3 -c "import urllib.parse, sys; print(urllib.parse.unquote(sys.argv[1]))" "$p" 2>/dev/null || echo "$p")"
+    fi
+    echo "$p"
+}
 
 # Java ve Jar tespiti
 JAVA_EXEC="$(which java || echo "/data/data/com.termux/files/usr/bin/java")"
@@ -24,24 +60,13 @@ if [ ! -d "$UYAP_JARS_DIR" ]; then
 fi
 
 if [ ! -f "$EXPORTER_JAR" ]; then
-    # Derlenmemişse derle
-    echo "[BİLGİ] uyap-exporter.jar derleniyor..."
+    log "INFO" "uyap-exporter.jar derleniyor..."
     mkdir -p "$BASE_DIR/java"
-    javac -d "$BASE_DIR/java" "$BASE_DIR/java/UyapVectorExporter.java" -cp "$UYAP_JARS_DIR/*"
-    jar cvf "$EXPORTER_JAR" -C "$BASE_DIR/java" uyap
+    javac -d "$BASE_DIR/java" "$BASE_DIR/java/UyapVectorExporter.java" -cp "$UYAP_JARS_DIR/*" >> "$LOG_FILE" 2>&1
+    jar cvf "$EXPORTER_JAR" -C "$BASE_DIR/java" uyap >> "$LOG_FILE" 2>&1
 fi
 
 CP="$EXPORTER_JAR:$UYAP_JARS_DIR/*"
-
-notify() {
-    local title="$1"
-    local msg="$2"
-    local icon="${3:-document-save}"
-    if command -v notify-send >/dev/null 2>&1; then
-        notify-send -i "$icon" "$title" "$msg" 2>/dev/null || true
-    fi
-    echo "[$title] $msg"
-}
 
 if [ $# -lt 2 ]; then
     echo "Kullanım: uyap-convert <--pdf|--docx|--odt> <dosya1.udf> [dosya2.udf ...]"
@@ -54,10 +79,14 @@ shift
 SUCCESS_COUNT=0
 FAIL_COUNT=0
 LAST_OUT=""
+PROCESSED_FILES=()
 
-for F in "$@"; do
+log "START" "Mod: $MODE, Dosya adedi: $#"
+
+for RAW_F in "$@"; do
+    F="$(clean_path "$RAW_F")"
     if [ ! -f "$F" ]; then
-        echo "[UYARI] Dosya bulunamadı, atlandı: $F"
+        log "WARN" "Dosya bulunamadı, atlandı: $F (Ham: $RAW_F)"
         continue
     fi
 
@@ -68,38 +97,54 @@ for F in "$@"; do
     case "$MODE" in
         --pdf)
             OUT="$DIR/${BASE}.pdf"
-            echo "[İŞLEM] UDF -> PDF dönüştürülüyor: $BNAME"
+            log "PROCESS" "UDF -> PDF dönüştürülüyor: $BNAME"
             if "$JAVA_EXEC" -Djava.awt.headless=true \
                 --add-opens=java.base/java.util=ALL-UNNAMED \
                 --add-opens=java.base/java.lang=ALL-UNNAMED \
                 --add-opens=java.desktop/java.awt=ALL-UNNAMED \
                 --add-opens=java.desktop/javax.swing=ALL-UNNAMED \
-                -cp "$CP" uyap.UyapVectorExporter pdf "$F" "$OUT"; then
-                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-                LAST_OUT="$OUT"
+                -cp "$CP" uyap.UyapVectorExporter pdf "$F" "$OUT" >> "$LOG_FILE" 2>&1; then
+                if [ -f "$OUT" ] && [ -s "$OUT" ]; then
+                    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    LAST_OUT="$OUT"
+                    PROCESSED_FILES+=("$OUT")
+                    log "SUCCESS" "PDF oluşturuldu: $OUT ($(wc -c < "$OUT") bayt)"
+                else
+                    log "ERROR" "PDF dosyası boş veya oluşturulamadı: $OUT"
+                    FAIL_COUNT=$((FAIL_COUNT + 1))
+                fi
             else
+                log "ERROR" "Java PDF export işlemi başarısız oldu: $BNAME"
                 FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
             ;;
         --odt)
             OUT="$DIR/${BASE}.odt"
-            echo "[İŞLEM] UDF -> ODT dönüştürülüyor: $BNAME"
+            log "PROCESS" "UDF -> ODT dönüştürülüyor: $BNAME"
             if "$JAVA_EXEC" -Djava.awt.headless=true \
                 --add-opens=java.base/java.util=ALL-UNNAMED \
                 --add-opens=java.base/java.lang=ALL-UNNAMED \
                 --add-opens=java.desktop/java.awt=ALL-UNNAMED \
                 --add-opens=java.desktop/javax.swing=ALL-UNNAMED \
-                -cp "$CP" uyap.UyapVectorExporter odt "$F" "$OUT"; then
-                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-                LAST_OUT="$OUT"
+                -cp "$CP" uyap.UyapVectorExporter odt "$F" "$OUT" >> "$LOG_FILE" 2>&1; then
+                if [ -f "$OUT" ] && [ -s "$OUT" ]; then
+                    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    LAST_OUT="$OUT"
+                    PROCESSED_FILES+=("$OUT")
+                    log "SUCCESS" "ODT oluşturuldu: $OUT ($(wc -c < "$OUT") bayt)"
+                else
+                    log "ERROR" "ODT dosyası boş veya oluşturulamadı: $OUT"
+                    FAIL_COUNT=$((FAIL_COUNT + 1))
+                fi
             else
+                log "ERROR" "Java ODT export işlemi başarısız oldu: $BNAME"
                 FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
             ;;
         --docx)
             TMP_ODT="$TMPDIR/${BASE}_$$.odt"
             OUT="$DIR/${BASE}.docx"
-            echo "[İŞLEM] UDF -> DOCX dönüştürülüyor (UYAP Motoru): $BNAME"
+            log "PROCESS" "UDF -> DOCX dönüştürülüyor (UYAP Motoru): $BNAME"
             
             # Adım 1: UYAP resmi motoruyla ODT üret
             if "$JAVA_EXEC" -Djava.awt.headless=true \
@@ -107,34 +152,37 @@ for F in "$@"; do
                 --add-opens=java.base/java.lang=ALL-UNNAMED \
                 --add-opens=java.desktop/java.awt=ALL-UNNAMED \
                 --add-opens=java.desktop/javax.swing=ALL-UNNAMED \
-                -cp "$CP" uyap.UyapVectorExporter odt "$F" "$TMP_ODT"; then
+                -cp "$CP" uyap.UyapVectorExporter odt "$F" "$TMP_ODT" >> "$LOG_FILE" 2>&1; then
                 
-                # Adım 2: LibreOffice headless ile kusursuz DOCX'e aktar
-                if soffice --headless --convert-to docx "$TMP_ODT" --outdir "$DIR" >/dev/null 2>&1; then
-                    # Üretilen dosya adını kontrol et
-                    GEN_DOCX="$DIR/${BASE}_$$.docx"
+                # Adım 2: LibreOffice headless ile DOCX'e aktar
+                if soffice --headless --convert-to docx "$TMP_ODT" --outdir "$TMPDIR" >> "$LOG_FILE" 2>&1; then
+                    GEN_DOCX="$TMPDIR/${BASE}_$$.docx"
                     if [ -f "$GEN_DOCX" ]; then
-                        mv "$GEN_DOCX" "$OUT"
+                        mv -f "$GEN_DOCX" "$OUT"
                     fi
                     rm -f "$TMP_ODT"
-                    if [ -f "$OUT" ]; then
-                        echo "[BAŞARILI] DOCX üretildi: $OUT"
+                    if [ -f "$OUT" ] && [ -s "$OUT" ]; then
+                        log "SUCCESS" "DOCX üretildi: $OUT ($(wc -c < "$OUT") bayt)"
                         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
                         LAST_OUT="$OUT"
+                        PROCESSED_FILES+=("$OUT")
                     else
+                        log "ERROR" "DOCX hedef konuma taşınamadı veya boş: $OUT"
                         FAIL_COUNT=$((FAIL_COUNT + 1))
                     fi
                 else
                     rm -f "$TMP_ODT"
+                    log "ERROR" "LibreOffice DOCX dönüştürme başarısız oldu"
                     FAIL_COUNT=$((FAIL_COUNT + 1))
                 fi
             else
                 rm -f "$TMP_ODT"
+                log "ERROR" "UYAP ODT ara dönüşümü başarısız oldu"
                 FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
             ;;
         *)
-            echo "[HATA] Geçersiz parametre: $MODE. Kullanın: --pdf, --docx, --odt"
+            log "ERROR" "Geçersiz parametre: $MODE. Kullanın: --pdf, --docx, --odt"
             exit 2
             ;;
     esac
@@ -145,10 +193,10 @@ EXT_LABEL="$(echo "$EXT_LABEL" | tr '[:lower:]' '[:upper:]')"
 
 if [ $SUCCESS_COUNT -gt 0 ]; then
     if [ $SUCCESS_COUNT -eq 1 ]; then
-        notify "UYAP Dönüştürme Başarılı" "$EXT_LABEL dosyası oluşturuldu:\n$(basename "$LAST_OUT")" "application-pdf"
+        notify "UYAP Dönüştürme Başarılı" "$EXT_LABEL oluşturuldu:\n$(basename "$LAST_OUT")\nKonum: $(dirname "$LAST_OUT")" "application-pdf"
     else
-        notify "UYAP Dönüştürme Başarılı" "$SUCCESS_COUNT adet dosya başarıyla $EXT_LABEL formatına dönüştürüldü." "application-pdf"
+        notify "UYAP Dönüştürme Başarılı" "$SUCCESS_COUNT dosya $EXT_LABEL formatına dönüştürüldü.\nKonum: $(dirname "$LAST_OUT")" "application-pdf"
     fi
 else
-    notify "UYAP Dönüştürme Hatası" "Dosyalar $EXT_LABEL formatına dönüştürülemedi." "dialog-error"
+    notify "UYAP Dönüştürme Hatası" "Dosyalar $EXT_LABEL formatına dönüştürülemedi.\nDetaylar: $LOG_FILE" "dialog-error"
 fi
